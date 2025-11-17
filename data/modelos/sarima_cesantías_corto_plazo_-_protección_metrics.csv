@@ -1,0 +1,13 @@
+,0
+serie,Cesantías Corto Plazo - Protección
+order,"(2, 1, 2)"
+seasonal_order,"(1, 1, 1, 12)"
+aic,726.2473799794138
+mae,2084.183882593465
+rmse,2952.082328953385
+mape_%,4.9487871683541345
+train_ini,2016-01
+train_fin,2023-11
+test_ini,2023-12
+test_fin,2025-11
+forecast_steps,12

@@ -1,0 +1,13 @@
+,0
+serie,Cesantías Corto Plazo - Skandia
+order,"(2, 1, 2)"
+seasonal_order,"(0, 1, 1, 12)"
+aic,736.370380115763
+mae,3317.8034368156527
+rmse,4182.412407378819
+mape_%,6.530140024627629
+train_ini,2016-01
+train_fin,2023-11
+test_ini,2023-12
+test_fin,2025-11
+forecast_steps,12

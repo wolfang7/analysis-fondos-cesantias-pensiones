@@ -1,0 +1,6 @@
+,0
+serie,Fondo Conservador Porvenir
+mejor_modelo,"ARIMA(1, 1, 1)"
+aic,45983.5812918505
+estacionaria,False
+mape,88.96718621778057

@@ -1,0 +1,6 @@
+,0
+serie,Cesantías Largo Plazo Colfondos
+mejor_modelo,"ARIMA(1, 1, 1)"
+aic,44111.945133026864
+estacionaria,False
+mape,84.57596327940921

@@ -1,0 +1,13 @@
+,0
+serie,Cesantías Corto Plazo - Porvenir
+order,"(2, 1, 2)"
+seasonal_order,"(1, 1, 1, 12)"
+aic,714.1878911549248
+mae,2860.8548541962264
+rmse,3599.199070019408
+mape_%,6.089632521239783
+train_ini,2016-01
+train_fin,2023-11
+test_ini,2023-12
+test_fin,2025-11
+forecast_steps,12

@@ -1,0 +1,6 @@
+,0
+serie,Fondo Moderado Skandia
+mejor_modelo,"ARIMA(1, 1, 1)"
+aic,45877.59289277847
+estacionaria,False
+mape,89.95045604823702
