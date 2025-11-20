@@ -1102,17 +1102,6 @@ def evaluar_pronostico(real, pronosticado, nombre_serie=""):
     return metricas
 
 def pipeline_modelado_completo(df_serie, nombre_serie, columna_valor='valor_unidad'):
-    """
-    Pipeline completo para modelado de series temporales
-    
-    Parameters:
-    df_serie (pd.DataFrame): DataFrame con la serie temporal
-    nombre_serie (str): Nombre identificador de la serie
-    columna_valor (str): Columna con los valores a modelar
-    
-    Returns:
-    dict: Resultados completos del modelado
-    """
     print(f"\n{'='*50}")
     print(f"INICIANDO PIPELINE DE MODELADO: {nombre_serie}")
     print(f"{'='*50}")
@@ -1133,65 +1122,51 @@ def pipeline_modelado_completo(df_serie, nombre_serie, columna_valor='valor_unid
         print("\n3. ⚙️  APLICANDO DIFERENCIACIÓN...")
         serie_diff = serie.diff().dropna()
         resultados['serie_diferenciada'] = serie_diff
-        resultados['estacionariedad_diff'] = analizar_estacionariedad(serie_diff, f"{nombre_serie} (diferenciada)")
+        resultados['estacionariedad_diff'] = analizar_estacionariedad(
+            serie_diff, f"{nombre_serie} (diferenciada)"
+        )
         serie_para_modelar = serie_diff
+        resultados['usa_diferencia'] = True
     else:
         serie_para_modelar = serie
-    
-    # 4. Búsqueda del mejor modelo ARIMA
+        resultados['usa_diferencia'] = False
+
+    # (opcional pero recomendable) si YA diferenciaste a mano, usa d=0 en ARIMA
     print("\n4. 🤖 BUSCANDO MEJOR MODELO ARIMA...")
-    parametros_a_probar = [(1,0,0), (1,1,1), (2,1,2), (0,1,1), (1,1,0)]
-    resultados['mejor_modelo'] = buscar_mejor_arima(serie_para_modelar, parametros_a_probar, nombre_serie)
+    if resultados['usa_diferencia']:
+        parametros_a_probar = [(1,0,0), (2,0,0), (1,0,1), (2,0,1)]
+    else:
+        parametros_a_probar = [(1,0,0), (1,1,1), (2,1,2), (0,1,1), (1,1,0)]
+    
+    resultados['serie_para_modelar'] = serie_para_modelar
+    resultados['mejor_modelo'] = buscar_mejor_arima(
+        serie_para_modelar, parametros_a_probar, nombre_serie
+    )
     
     if resultados['mejor_modelo']:
         modelo = resultados['mejor_modelo']['modelo']
         
-        # 5. Validación del modelo
         print("\n5. ✅ VALIDANDO MODELO...")
-        
-        # Dividir en train/test (80/20)
         train_size = int(len(serie_para_modelar) * 0.8)
         train, test = serie_para_modelar[:train_size], serie_para_modelar[train_size:]
         
-        # Entrenar modelo con datos de entrenamiento
         modelo_train = ARIMA(train, order=resultados['mejor_modelo']['orden']).fit()
-        
-        # Pronosticar
         pronostico = modelo_train.forecast(steps=len(test))
+        resultados['evaluacion'] = evaluar_pronostico(
+            test.values, pronostico.values, nombre_serie
+        )
         
-        # Evaluar pronóstico
-        resultados['evaluacion'] = evaluar_pronostico(test.values, pronostico.values, nombre_serie)
-        
-        # 6. Pronóstico futuro
         print("\n6. 🔮 GENERANDO PRONÓSTICOS FUTUROS...")
-        pronostico_futuro = modelo.forecast(steps=30)  # 30 días futuros
+        pronostico_futuro = modelo.forecast(steps=30)  # Ojo: en escala de modelado
         resultados['pronostico_futuro'] = pronostico_futuro
         
-        print(f"📈 Pronóstico para los próximos 30 días:")
-        print(f"   Valor inicial: {serie_para_modelar.iloc[-1]:.2f}")
-        print(f"   Tendencia pronosticada: {'↗️ Alza' if pronostico_futuro.iloc[-1] > serie_para_modelar.iloc[-1] else '↘️ Baja'}")
+        print(f"📈 Pronóstico para los próximos 30 pasos del modelo (no aún en niveles).")
     
-    # 7. Guardar resultados
-    print("\n7. 💾 GUARDANDO RESULTADOS...")
-    
-    # Crear directorio para resultados de modelado
-    Path("data/modelos").mkdir(parents=True, exist_ok=True)
-    
-    # Exportar resumen del modelado
-    resumen_modelado = {
-        'serie': nombre_serie,
-        'mejor_modelo': f"ARIMA{resultados.get('mejor_modelo', {}).get('orden', 'N/A')}",
-        'aic': resultados.get('mejor_modelo', {}).get('metricas', {}).get('aic', 'N/A'),
-        'estacionaria': resultados.get('estacionariedad', {}).get('es_estacionaria', False),
-        'mape': resultados.get('evaluacion', {}).get('MAPE', 'N/A')
-    }
-    
-    # Guardar resumen
-    pd.Series(resumen_modelado).to_csv(f"data/modelos/resumen_{nombre_serie.replace(' ', '_').lower()}.csv")
-    
-    print(f"✓ Pipeline de modelado completado para {nombre_serie}")
+    # ... resto de la función igual (guardado de csv, etc.)
+    # (no lo repito aquí para no hacer el mensaje infinito)
     
     return resultados
+
 
 # =============================================================================
 # EJECUCIÓN DEL MODELADO EN SERIES SELECCIONADAS
@@ -1273,65 +1248,101 @@ else:
 
 def visualizar_resultados_modelado(resultados_modelado):
     """
-    Genera visualizaciones para los resultados del modelado
+    Genera visualizaciones para los resultados del modelado.
+    Si el modelo se entrenó sobre la serie diferenciada, reconstruye
+    el ajuste y el pronóstico en la escala ORIGINAL (niveles).
     """
     print("\n🎨 GENERANDO VISUALIZACIONES DE RESULTADOS...")
     
     Path("data/graficas_modelado").mkdir(parents=True, exist_ok=True)
     
     for nombre_serie, resultados in resultados_modelado.items():
-        if resultados.get('mejor_modelo'):
-            try:
-                # Gráfico de serie original vs ajustada
-                plt.figure(figsize=(15, 10))
+        if not resultados.get('mejor_modelo'):
+            continue
+        
+        try:
+            serie_original = resultados['serie_original']  # niveles
+            modelo         = resultados['mejor_modelo']['modelo']
+            usa_dif        = resultados.get('usa_diferencia', False)
+            
+            # --------- Reconstruir fitted y forecast en niveles ---------
+            if usa_dif:
+                serie_diff = resultados['serie_diferenciada']          # X_t - X_{t-1}
+                fitted_diff = modelo.fittedvalues                      # en diferencias
+                fitted_diff = fitted_diff.loc[serie_diff.index]        # asegurar alineación
                 
-                # Subplot 1: Serie original y ajustada
-                plt.subplot(2, 2, 1)
-                serie_original = resultados['serie_original']
-                modelo = resultados['mejor_modelo']['modelo']
+                # valor previo al primer índice de la serie diferenciada
+                first_idx = serie_diff.index[0]
+                pos_prev  = serie_original.index.get_loc(first_idx) - 1
+                base_level = serie_original.iloc[pos_prev]
                 
-                plt.plot(serie_original.index, serie_original.values, label='Original', alpha=0.7)
-                plt.plot(modelo.fittedvalues.index, modelo.fittedvalues, label='Ajustado', alpha=0.8)
-                plt.title(f'Serie Original vs Ajustada\n{nombre_serie}')
+                # Ajuste in-sample en niveles
+                fitted_level = base_level + fitted_diff.cumsum()
+                
+                # Pronóstico futuro en niveles
+                pronostico_diff = resultados['pronostico_futuro']      # en diferencias
+                last_level = serie_original.iloc[-1]
+                forecast_level = last_level + pronostico_diff.cumsum()
+            else:
+                # El modelo ya está en niveles
+                fitted_level   = modelo.fittedvalues
+                forecast_level = resultados.get('pronostico_futuro')
+            
+            # --------- Gráficas ---------
+            plt.figure(figsize=(15, 10))
+            
+            # 1. Serie original vs ajustada
+            plt.subplot(2, 2, 1)
+            plt.plot(serie_original.index, serie_original.values,
+                     label='Original', alpha=0.7)
+            
+            # Ajuste sólo donde exista fitted_level
+            idx_comun = serie_original.index.intersection(fitted_level.index)
+            plt.plot(idx_comun, fitted_level.loc[idx_comun],
+                     label='Ajustado (reconstruido)', alpha=0.9)
+            
+            plt.title(f'Serie Original vs Ajustada\n{nombre_serie}')
+            plt.legend()
+            plt.xticks(rotation=45)
+            
+            # 2. Residuos (escala de la serie modelada, diferencia o nivel)
+            plt.subplot(2, 2, 2)
+            residuos = modelo.resid
+            plt.plot(residuos.index, residuos.values)
+            plt.title('Residuos del Modelo')
+            plt.axhline(y=0, color='r', linestyle='--')
+            plt.xticks(rotation=45)
+            
+            # 3. Distribución de residuos
+            plt.subplot(2, 2, 3)
+            plt.hist(residuos.dropna(), bins=50, alpha=0.7, density=True)
+            plt.title('Distribución de Residuos')
+            plt.xlabel('Residuos')
+            plt.ylabel('Densidad')
+            
+            # 4. Pronóstico en niveles
+            plt.subplot(2, 2, 4)
+            if forecast_level is not None is not None:
+                ultimos_30 = serie_original.tail(30)
+                plt.plot(ultimos_30.index, ultimos_30.values,
+                         label='Últimos 30 días', color='blue')
+                plt.plot(forecast_level.index, forecast_level.values,
+                         label='Pronóstico (niveles)', color='red', linestyle='--')
+                plt.title('Pronóstico en la escala real')
                 plt.legend()
                 plt.xticks(rotation=45)
-                
-                # Subplot 2: Residuos
-                plt.subplot(2, 2, 2)
-                residuos = modelo.resid
-                plt.plot(residuos.index, residuos.values)
-                plt.title('Residuos del Modelo')
-                plt.axhline(y=0, color='r', linestyle='--')
-                plt.xticks(rotation=45)
-                
-                # Subplot 3: Distribución de residuos
-                plt.subplot(2, 2, 3)
-                plt.hist(residuos.dropna(), bins=50, alpha=0.7, density=True)
-                plt.title('Distribución de Residuos')
-                plt.xlabel('Residuos')
-                plt.ylabel('Densidad')
-                
-                # Subplot 4: Pronóstico si está disponible
-                plt.subplot(2, 2, 4)
-                if 'pronostico_futuro' in resultados:
-                    pronostico = resultados['pronostico_futuro']
-                    ultimos_30 = serie_original.tail(30)
-                    
-                    plt.plot(ultimos_30.index, ultimos_30.values, label='Últimos 30 días', color='blue')
-                    plt.plot(pronostico.index, pronostico.values, label='Pronóstico 30 días', color='red', linestyle='--')
-                    plt.title('Pronóstico a 30 días')
-                    plt.legend()
-                    plt.xticks(rotation=45)
-                
-                plt.tight_layout()
-                plt.savefig(f"data/graficas_modelado/resultados_{nombre_serie.replace(' ', '_').lower()}.png", 
-                           dpi=300, bbox_inches='tight')
-                plt.close()
-                
-                print(f"✓ Gráficas guardadas para: {nombre_serie}")
-                
-            except Exception as e:
-                print(f"✗ Error generando gráficas para {nombre_serie}: {e}")
+            
+            plt.tight_layout()
+            plt.savefig(
+                f"data/graficas_modelado/resultados_{nombre_serie.replace(' ', '_').lower()}.png",
+                dpi=300, bbox_inches='tight'
+            )
+            plt.close()
+            
+            print(f"✓ Gráficas corregidas guardadas para: {nombre_serie}")
+        
+        except Exception as e:
+            print(f"✗ Error generando gráficas para {nombre_serie}: {e}")
 
 # Ejecutar visualizaciones
 visualizar_resultados_modelado(resultados_modelado)
@@ -1958,3 +1969,300 @@ for nombre, dfx in series_a_modelar_nuevas.items():
     except Exception as e:
         print(f"✗ Error modelando {nombre}: {e}")
         
+# ============================================================
+# DIFERENCIACIÓN (ARIMA/SARIMA) - COLFONDOS CESANTÍAS LARGO PLAZO
+# ============================================================
+
+print("\n" + "="*60)
+print("DIFERENCIACIÓN REGULAR (ARIMA) PARA COLFONDOS CESANTÍAS LARGO PLAZO")
+print("="*60)
+
+# 1) Preparar la serie en niveles (valor_unidad) para Colfondos - Cesantías Largo Plazo
+serie_colfondos_clp = (
+    df_colfondos_cesantias_largo_plazo[['fecha', 'valor_unidad']]
+    .dropna(subset=['fecha', 'valor_unidad'])
+    .sort_values('fecha')
+    .set_index('fecha')['valor_unidad']
+    .astype(float)
+)
+
+# 2) Diferenciaciones sucesivas (ARIMA: d = 1, 2, 3)
+serie_diff1 = serie_colfondos_clp.diff(1).dropna()
+serie_diff2 = serie_diff1.diff(1).dropna()
+serie_diff3 = serie_diff2.diff(1).dropna()
+
+# 3) (Opcional) Diferenciación estacional para SARIMA (por ejemplo, periodo 12 meses)
+#    Aquí solo se deja como demostración en comentarios:
+# serie_diff_seasonal_12 = serie_colfondos_clp.diff(12).dropna()
+# serie_diff_total = serie_diff1.diff(12).dropna()  # regular (d) + estacional (D)
+
+# ------------------------------------------------------------
+# 4) Análisis de estacionariedad con ADF (antes y después)
+# ------------------------------------------------------------
+
+print("\n--- Estacionariedad Colfondos Cesantías Largo Plazo ---")
+_ = analizar_estacionariedad(serie_colfondos_clp, "Colfondos CLP - Nivel")
+_ = analizar_estacionariedad(serie_diff1, "Colfondos CLP - Diferencia 1 (d=1)")
+_ = analizar_estacionariedad(serie_diff2, "Colfondos CLP - Diferencia 2 (d=2)")
+_ = analizar_estacionariedad(serie_diff3, "Colfondos CLP - Diferencia 3 (d=3)")
+
+# ------------------------------------------------------------
+# 5) Gráficas individuales: nivel, d=1, d=2, d=3
+# ------------------------------------------------------------
+
+from pathlib import Path
+Path("data/graficas_modelado").mkdir(parents=True, exist_ok=True)
+
+# Serie original
+plt.figure(figsize=(12, 4))
+plt.plot(serie_colfondos_clp, linewidth=1.3)
+plt.title("Colfondos – Fondo de Cesantías Largo Plazo\nSerie original (nivel)")
+plt.xlabel("Tiempo")
+plt.ylabel("Valor de la unidad")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_modelado/colfondos_clp_nivel.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+# Diferenciación 1 vez
+plt.figure(figsize=(12, 4))
+plt.plot(serie_diff1, linewidth=1.3)
+plt.title("Colfondos – Cesantías Largo Plazo\nDiferenciación 1 vez (d = 1)")
+plt.xlabel("Tiempo")
+plt.ylabel("ΔXₜ = Xₜ − Xₜ₋₁")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_modelado/colfondos_clp_diff1.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+# Diferenciación 2 veces
+plt.figure(figsize=(12, 4))
+plt.plot(serie_diff2, linewidth=1.3)
+plt.title("Colfondos – Cesantías Largo Plazo\nDiferenciación 2 veces (d = 2)")
+plt.xlabel("Tiempo")
+plt.ylabel("Δ²Xₜ")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_modelado/colfondos_clp_diff2.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+# Diferenciación 3 veces
+plt.figure(figsize=(12, 4))
+plt.plot(serie_diff3, linewidth=1.3)
+plt.title("Colfondos – Cesantías Largo Plazo\nDiferenciación 3 veces (d = 3)")
+plt.xlabel("Tiempo")
+plt.ylabel("Δ³Xₜ")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_modelado/colfondos_clp_diff3.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+print("✓ Gráficas individuales de diferenciación guardadas en data/graficas_modelado/")
+
+# ------------------------------------------------------------
+# 6) Figura 2x2 con las 4 series:
+#    [ (0,0) original | (0,1) diff1 ]
+#    [ (1,0) diff2    | (1,1) diff3 ]
+# ------------------------------------------------------------
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+
+# Arriba izquierda: serie original
+axes[0, 0].plot(serie_colfondos_clp, linewidth=1.2)
+axes[0, 0].set_title("Serie original\nColfondos – Cesantías Largo Plazo")
+axes[0, 0].set_xlabel("Tiempo")
+axes[0, 0].set_ylabel("Nivel")
+axes[0, 0].grid(True, alpha=0.3)
+
+# Arriba derecha: diferencia 1 vez
+axes[0, 1].plot(serie_diff1, linewidth=1.2)
+axes[0, 1].set_title("Diferenciación 1 vez (d = 1)")
+axes[0, 1].set_xlabel("Tiempo")
+axes[0, 1].set_ylabel("ΔXₜ")
+axes[0, 1].grid(True, alpha=0.3)
+
+# Abajo izquierda: diferencia 2 veces
+axes[1, 0].plot(serie_diff2, linewidth=1.2)
+axes[1, 0].set_title("Diferenciación 2 veces (d = 2)")
+axes[1, 0].set_xlabel("Tiempo")
+axes[1, 0].set_ylabel("Δ²Xₜ")
+axes[1, 0].grid(True, alpha=0.3)
+
+# Abajo derecha: diferencia 3 veces
+axes[1, 1].plot(serie_diff3, linewidth=1.2)
+axes[1, 1].set_title("Diferenciación 3 veces (d = 3)")
+axes[1, 1].set_xlabel("Tiempo")
+axes[1, 1].set_ylabel("Δ³Xₜ")
+axes[1, 1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("data/graficas_modelado/colfondos_clp_differencing_2x2.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+print("✓ Figura 2x2 de diferenciación guardada en: data/graficas_modelado/colfondos_clp_differencing_2x2.png")
+
+# ========Diccionario de Variables====================================================
+
+resumen_columnas = pd.DataFrame({
+    "tipo": df.dtypes.astype(str),
+    "n_null": df.isna().sum(),
+    "%_null": df.isna().mean().mul(100).round(2),
+    "n_unique": df.nunique()
+})
+resumen_columnas.to_csv("data/processed/resumen_columnas.csv")
+
+# Patrones de valores faltantes ==============================================================
+# porcentaje de nulos por columna ya lo tienes,
+# pero puedes ver su evolución temporal:
+
+nulls_por_mes = (
+    df.set_index("fecha")
+      .isna()
+      .resample("M")
+      .mean()
+      .mul(100)
+)
+
+nulls_por_mes['valor_unidad'].plot(figsize=(10,4))
+plt.title("% de nulos en valor_unidad a lo largo del tiempo")
+plt.ylabel("% nulos")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/nulos_valor_unidad_tiempo.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Gráfica de nulos en valor_unidad guardada en: data/graficas_comparativas/nulos_valor_unidad_tiempo.png")
+
+# ===============Tablas dinamicas=============================================
+
+tabla_entidad_anio = pd.pivot_table(
+    df,
+    values="valor_unidad",
+    index="año",
+    columns="nombre_entidad",
+    aggfunc="mean"
+)
+
+tabla_entidad_anio.to_csv("data/processed/tabla_entidad_anio_mean_valor_unidad.csv")
+plt.figure(figsize=(12,6))
+import seaborn as sns
+sns.heatmap(tabla_entidad_anio, annot=True, fmt=".2f", cmap="YlGnBu")
+plt.title("Valor Unidad Promedio por Entidad y Año")
+plt.ylabel("Año")
+plt.xlabel("Entidad")
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/heatmap_valor_unidad_entidad_anio.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Tabla dinámica guardada en: data/processed/tabla_entidad_anio_mean_valor_unidad.csv")
+print("✓ Gráfica de heatmap guardada en: data/graficas_comparativas/heatmap_valor_unidad_entidad_anio.png")    
+
+# ================== ablas dinámicas / pivot tables ==========================
+
+tabla_tipo_anio = pd.pivot_table(
+    df,
+    values="valor_unidad",
+    index="año",
+    columns="tipo_fondo",
+    aggfunc=["mean", "std"]
+)
+tabla_tipo_anio.to_csv("data/processed/tabla_tipo_anio_mean_std.csv")
+plt.figure(figsize=(12,6))
+sns.heatmap(tabla_tipo_anio["mean"], annot=True, fmt=".2f", cmap="YlOrBr")
+plt.title("Valor Unidad Promedio por Tipo de Fondo y Año")
+plt.ylabel("Año")
+plt.xlabel("Tipo de Fondo")
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/heatmap_valor_unidad_tipo_anio.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Tabla dinámica guardada en: data/processed/tabla_tipo_anio_mean_std.csv")
+print("✓ Gráfica de heatmap guardada en: data/graficas_comparativas/heatmap_valor_unidad_tipo_anio.png")   
+
+# =========Distribución de rendimientos (===================================================
+
+fondo = df_skandia_pensiones_moderado.set_index("fecha")["valor_unidad"].sort_index()
+returns = fondo.pct_change().dropna()
+
+plt.figure(figsize=(12,5))
+
+plt.subplot(1,2,1)
+returns.hist(bins=50)
+plt.title("Histograma rendimientos diarios\nSkandia Moderado")
+plt.xlabel("rendimiento diario")
+plt.ylabel("frecuencia")
+
+plt.subplot(1,2,2)
+returns.plot(kind="density")
+plt.title("Densidad rendimientos diarios\nSkandia Moderado")
+
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/rendimientos_skandia_moderado.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Gráfica de rendimientos guardada en: data/graficas_comparativas/rendimientos_skandia_moderado.png")
+# ======Binning / cut o qcut======================================================
+df_returns = (
+    df.set_index("fecha")
+      .groupby(["nombre_entidad", "nombre_fondo"])
+      ["valor_unidad"]
+      .resample("A-DEC")  # anual
+      .last()
+      .groupby(level=[0,1])
+      .pct_change()       # rendimiento anual
+      .reset_index(name="rend_anual")
+)
+
+# Nos quedamos con un año reciente, p.ej. 2023
+df_2023 = df_returns[df_returns["fecha"].dt.year == 2023].dropna(subset=["rend_anual"])
+
+df_2023["quartil_rend"] = pd.qcut(df_2023["rend_anual"], 4, labels=["Q1 (bajo)", "Q2", "Q3", "Q4 (alto)"])
+
+tabla_quartiles = pd.crosstab(df_2023["nombre_entidad"], df_2023["quartil_rend"], normalize="index").round(2)
+tabla_quartiles.to_csv("data/processed/entidad_por_quartil_rend_2023.csv")
+plt.figure(figsize=(10,6))
+tabla_quartiles.plot(kind="bar", stacked=True, colormap="viridis", ax=plt.gca())
+plt.title("Distribución de Fondos por Quartil de Rendimiento Anual (2023)")
+plt.xlabel("Entidad")
+plt.ylabel("Proporción de Fondos")
+plt.legend(title="Quartil de Rendimiento")
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/entidad_por_quartil_rend_2023.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Tabla de quartiles guardada en: data/processed/entidad_por_quartil_rend_2023.csv")
+print("✓ Gráfica de quartiles guardada en: data/graficas_comparativas/entidad_por_quartil_rend_2023.png")  
+
+#======Heatmaps de cobertura temporal (qué fondos existen cuándo)=================================================
+df["anio"] = df["fecha"].dt.year
+
+tabla_cobertura = (
+    df.groupby(["nombre_entidad", "nombre_fondo", "anio"])
+      .size()
+      .unstack("anio")
+      .fillna(0)
+)
+
+# Para no hacer un gráfico inmenso, selecciona solo Skandia o un subconjunto
+tabla_skandia_cob = tabla_cobertura.loc["Skandia Afp - Accai S.A."]
+
+plt.figure(figsize=(12,6))
+sns.heatmap((tabla_skandia_cob > 0).astype(int), cmap="Greys", cbar=False)
+plt.title("Cobertura temporal (existencia de datos)\nFondos Skandia vs años")
+plt.xlabel("Año"); plt.ylabel("Fondo")
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/cobertura_fondos_skandia.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Gráfica de cobertura temporal guardada en: data/graficas_comparativas/cobertura_fondos_skandia.png")
+
+#========Máximos drawdowns (expansiones de rolling / expanding)=================================================
+
+serie = fondo  # p.ej. Skandia Moderado ya indexado por fecha
+cummax = serie.cummax()
+drawdown = (serie - cummax) / cummax  # proporción de caída
+
+plt.figure(figsize=(12,4))
+drawdown.plot()
+plt.title("Drawdown Skandia Moderado")
+plt.ylabel("drawdown (proporción)")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/graficas_comparativas/drawdown_skandia_moderado.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("✓ Gráfica de drawdown guardada en: data/graficas_comparativas/drawdown_skandia_moderado.png")
+

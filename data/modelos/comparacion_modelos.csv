@@ -1,4 +1,4 @@
 Serie,Mejor Modelo,AIC,Estacionaria,MAPE (%)
-Fondo Moderado Skandia,"ARIMA(1, 1, 1)",45877.59289277847,False,89.95045604823702
-Fondo Conservador Porvenir,"ARIMA(1, 1, 1)",45983.5812918505,False,88.96718621778057
-Cesantías Largo Plazo Colfondos,"ARIMA(1, 1, 1)",44111.945133026864,False,84.57596327940921
+Fondo Moderado Skandia,"ARIMA(1, 0, 1)",45920.390442336255,False,89.94125919505723
+Fondo Conservador Porvenir,"ARIMA(1, 0, 1)",46040.734743282665,False,89.17243511808022
+Cesantías Largo Plazo Colfondos,"ARIMA(1, 0, 1)",44151.84680589099,False,83.64906714031437
